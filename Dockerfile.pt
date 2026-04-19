@@ -2,6 +2,7 @@ FROM stanfordpl/stoke:latest
 
 COPY src/search/search.h /home/stoke/stoke/src/search/search.h
 COPY src/search/search.cc /home/stoke/stoke/src/search/search.cc
+COPY tools/apps/stoke_search.cc /home/stoke/stoke/tools/apps/stoke_search.cc
 
 WORKDIR /home/stoke/stoke
 RUN printf 'STOKE_PLATFORM="sandybridge"\nBUILD_TYPE=release\nMISC_OPTIONS=\n' > .stoke_config

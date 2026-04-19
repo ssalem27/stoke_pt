@@ -119,6 +119,26 @@ auto& no_progress_update_arg =
   cpputil::FlagArg::create("no_progress_update")
   .description("Don't show a progress update whenever a new best program is discovered");
 
+auto& pt_heading = Heading::create("Parallel Tempering Options:");
+auto& parallel_tempering_arg =
+  cpputil::FlagArg::create("parallel_tempering")
+  .description("Use parallel tempering instead of simulated annealing");
+auto& num_replicas_arg =
+  cpputil::ValueArg<size_t>::create("num_replicas")
+  .usage("<int>")
+  .description("Number of temperature replicas for parallel tempering")
+  .default_val(8);
+auto& pt_beta_min_arg =
+  cpputil::ValueArg<double>::create("pt_beta_min")
+  .usage("<double>")
+  .description("Lowest beta (highest temperature) for parallel tempering")
+  .default_val(0.01);
+auto& pt_beta_max_arg =
+  cpputil::ValueArg<double>::create("pt_beta_max")
+  .usage("<double>")
+  .description("Highest beta (lowest temperature, matches --beta) for parallel tempering")
+  .default_val(1.0);
+
 void sep(ostream& os, string c = "*") {
   for (size_t i = 0; i < 80; ++i) {
     os << c;
@@ -301,6 +321,20 @@ void show_final_update(const StatisticsCallbackData& stats, SearchState& state,
   }
 }
 
+void show_pt_replica_summary(const vector<SearchState>& replicas, const vector<double>& betas) {
+  Console::msg() << "Replica summary:" << endl;
+  Console::msg() << endl;
+  for (size_t i = 0; i < replicas.size(); ++i) {
+    Console::msg() << "  [" << i << "]"
+                   << "  beta=" << betas[i]
+                   << "  best_cost=" << replicas[i].best_yet_cost
+                   << "  best_correct=" << replicas[i].best_correct_cost
+                   << (replicas[i].success ? "  [correct rewrite found]" : "")
+                   << endl;
+  }
+  Console::msg() << endl;
+}
+
 void new_best_correct_callback(const NewBestCorrectCallbackData& data, void* arg) {
 
   if (results_arg.has_been_provided()) {
@@ -443,6 +477,89 @@ int main(int argc, char** argv) {
 
   string final_msg;
   SearchStateGadget state(target, aux_fxns);
+
+  if (parallel_tempering_arg.value()) {
+    // -------------------------------------------------------------------------
+    // Parallel Tempering path
+    // -------------------------------------------------------------------------
+    const size_t num_replicas = num_replicas_arg.value();
+    const double beta_min = pt_beta_min_arg.value();
+    const double beta_max = pt_beta_max_arg.value();
+
+    // Geometric beta schedule: beta_min (hot) → beta_max (cold)
+    vector<double> betas(num_replicas);
+    for (size_t i = 0; i < num_replicas; ++i) {
+      betas[i] = (num_replicas == 1)
+                 ? beta_max
+                 : beta_min * pow(beta_max / beta_min, (double)i / (num_replicas - 1));
+    }
+
+    // Create one independent search state per replica
+    vector<SearchState> replicas;
+    for (size_t i = 0; i < num_replicas; ++i) {
+      replicas.push_back(SearchStateGadget(target, aux_fxns));
+    }
+
+    CostFunctionGadget fxn(target, &training_sb, &perf_sb);
+
+    search.set_timeout_itr(timeout_iterations_arg.value());
+    if (timeout_seconds_arg.value() != 0) {
+      search.set_timeout_sec(duration<double>(timeout_seconds_arg.value()));
+    }
+
+    Console::msg() << "Running parallel tempering ("
+                   << num_replicas << " replicas"
+                   << ", beta: " << beta_min << " → " << beta_max
+                   << ", timeout: " << timeout_iterations_arg.value() << " iterations"
+                   << "):" << endl << endl;
+
+    const auto start_search = steady_clock::now();
+    search.run_parallel_tempering(target, fxn, init_arg, replicas, aux_fxns, betas);
+    search_elapsed = duration_cast<duration<double>>(steady_clock::now() - start_search);
+    total_iterations = search.get_statistics().iterations;
+    total_restarts = 1;
+
+    show_pt_replica_summary(replicas, betas);
+
+    // Promote the replica with the best verified result into state
+    size_t best_idx = 0;
+    for (size_t i = 1; i < num_replicas; ++i) {
+      if (replicas[i].success && !replicas[best_idx].success) {
+        best_idx = i;
+      } else if (replicas[i].success && replicas[best_idx].success &&
+                 replicas[i].best_correct_cost < replicas[best_idx].best_correct_cost) {
+        best_idx = i;
+      }
+    }
+    state.current          = replicas[best_idx].current;
+    state.current_cost     = replicas[best_idx].current_cost;
+    state.best_yet         = replicas[best_idx].best_yet;
+    state.best_yet_cost    = replicas[best_idx].best_yet_cost;
+    state.best_correct     = replicas[best_idx].best_correct;
+    state.best_correct_cost = replicas[best_idx].best_correct_cost;
+    state.success          = replicas[best_idx].success;
+    state.interrupted      = replicas[best_idx].interrupted;
+
+    if (state.interrupted) {
+      show_final_update(search.get_statistics(), state, total_restarts, total_iterations, start, search_elapsed, false, false);
+      Console::msg() << "Search interrupted!" << endl;
+      exit(1);
+    }
+
+    const auto verified = verifier.verify(target, state.best_correct);
+    if (state.success && verified) {
+      final_msg = "Parallel tempering terminated successfully with a verified rewrite!";
+    } else if (state.success) {
+      final_msg = "Parallel tempering found a rewrite, but verification failed.";
+    } else {
+      show_final_update(search.get_statistics(), state, total_restarts, total_iterations, start, search_elapsed, false, true);
+      Console::error(1) << "Parallel tempering terminated without finding a correct rewrite." << endl;
+    }
+
+  } else {
+  // -------------------------------------------------------------------------
+  // Original simulated annealing path
+  // -------------------------------------------------------------------------
   for (size_t i = 0; ; ++i) {
     CostFunctionGadget fxn(target, &training_sb, &perf_sb);
 
@@ -534,6 +651,7 @@ int main(int argc, char** argv) {
       Console::msg() << "Restarting search" << endl;
     }
   }
+  } // end SA else-branch
 
   if (postprocessing_arg == Postprocessing::FULL) {
     CfgTransforms::remove_redundant(state.best_correct);
