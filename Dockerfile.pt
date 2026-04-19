@@ -1,0 +1,9 @@
+FROM stanfordpl/stoke:latest
+
+COPY src/search/search.h /home/stoke/stoke/src/search/search.h
+COPY src/search/search.cc /home/stoke/stoke/src/search/search.cc
+
+WORKDIR /home/stoke/stoke
+RUN printf 'STOKE_PLATFORM="sandybridge"\nBUILD_TYPE=release\nMISC_OPTIONS=\n' > .stoke_config
+RUN bash src/validator/generate_handlers_h.sh src/validator handlers.h
+RUN make -j4 bin/stoke_search bin/stoke_extract bin/stoke_testcase bin/stoke_replace 2>&1

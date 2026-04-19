@@ -81,6 +81,10 @@ public:
 
   /** Run search beginning from a search state using a user-supplied cost function. */
   void run(const Cfg& target, CostFunction& fxn, Init init, SearchState& state, std::vector<stoke::TUnit>& aux_fxn);
+  /** Run parallel tempering search over a set of replicas at different temperatures. */
+  void run_parallel_tempering(const Cfg& target, CostFunction& fxn, Init init,
+                              std::vector<SearchState>& replicas, std::vector<stoke::TUnit>& aux_fxns,
+                              const std::vector<double>& betas);
   /** Stops an in-progress search.  To be used from a callback, for example. */
   void stop();
 
