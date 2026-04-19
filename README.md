@@ -4,7 +4,8 @@ A research fork of [STOKE](https://github.com/StanfordPL/stoke), the stochastic 
 
 This work was done as part of undergraduate research at the George Mason University Experimental Geometry Lab, exploring whether PT's ability to escape local minima improves optimizer convergence on compiler optimization benchmarks.
 
----
+This project was developed as part of research conducted under Professor Michael Jarret Baume at George Mason University
+
 
 ## Background
 
